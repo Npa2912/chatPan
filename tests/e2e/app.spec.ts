@@ -218,3 +218,62 @@ test("password reset tokens expire, are single use and invalidate existing sessi
   await db.emailToken.deleteMany({ where: { email: address } });
   await context.dispose();
 });
+
+test("model picker uses mocked access validation: prefers gpt-6.1-sol and rejects a forbidden model", async ({
+  page,
+}) => {
+  const registration = await page.request.post("/api/auth/register", {
+    headers: { origin },
+    data: { name: "Model picker test", email: email(), password },
+  });
+  expect(registration.status()).toBe(200);
+  try {
+    await page.route("**/api/models", (route) =>
+      route.fulfill({
+        json: [
+          { id: "gpt-6-astra", access: "unverified" },
+          { id: "gpt-6.1-sol", default: true, access: "unverified" },
+        ],
+      }),
+    );
+    const probes: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route("**/api/models/validate", async (route) => {
+      const { model } = route.request().postDataJSON();
+      probes.push(model);
+      if (model === "gpt-6.1-sol") {
+        await gate;
+        await route.fulfill({
+          json: { id: model, access: "verified", wireApi: "responses" },
+        });
+      } else
+        await route.fulfill({
+          status: 502,
+          json: {
+            error: "Mocked provider: model permission denied",
+            code: "provider_forbidden",
+            providerStatus: 403,
+            protocol: "responses",
+          },
+        });
+    });
+    await page.goto("/");
+    await expect.poll(() => probes).toEqual(["gpt-6.1-sol"]);
+    const selector = page.getByLabel("Chọn model", { exact: true });
+    await expect(selector).toHaveValue("");
+    await expect(selector).toBeDisabled();
+    release();
+    await expect(selector).toHaveValue("gpt-6.1-sol");
+    await selector.selectOption("gpt-6-astra");
+    await expect(selector).toHaveValue("");
+    await expect(
+      page.getByRole("alert").filter({ hasText: "Mocked provider:" }),
+    ).toContainText("model permission denied");
+    expect(probes).toEqual(["gpt-6.1-sol", "gpt-6-astra"]);
+  } finally {
+    await page.request.delete("/api/me", { headers: { origin } });
+  }
+});

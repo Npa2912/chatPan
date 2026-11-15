@@ -48,7 +48,7 @@ describe("Provider adapter — explicit mocked upstream tests", () => {
       )) {
         void value;
       }
-    }).rejects.toThrow("báo lỗi");
+    }).rejects.toThrow("Nhà cung cấp không thể hoàn tất");
   });
   it("does not fabricate content on malformed JSON", async () => {
     await expect(async () => {

@@ -2,7 +2,7 @@
 
 **Your Personal AI Universe** — ứng dụng trợ lý AI với giao diện tiếng Việt, nền đen và điểm nhấn vàng. Không có gói Pro, thanh toán hoặc hạn mức tin nhắn thương mại. Nhà cung cấp AI vẫn có thể tính phí và giới hạn API.
 
-Đây là phiên bản cốt lõi hoạt động với PostgreSQL thật. **Chưa phải toàn bộ sản phẩm production theo master prompt**: kết nối Xingchi trực tiếp còn chờ Base URL và key mới, xem bảng xác minh bên dưới.
+Đây là phiên bản cốt lõi hoạt động với PostgreSQL thật. **Chưa phải toàn bộ sản phẩm production theo master prompt**: adapter Xingchi hỗ trợ Responses API và Chat Completions; kiểm thử live vẫn cần key và quyền mạng được áp dụng vào runtime, xem bảng xác minh bên dưới.
 
 ## Chạy trên máy phát triển
 
@@ -31,7 +31,9 @@ Không dùng mật khẩu PostgreSQL ví dụ cho production. Dữ liệu phát 
 | `APP_URL`                             | Origin chính xác, bắt buộc khi triển khai; HTTPS bật cookie Secure                                                     |
 | `XINGCHI_BASE_URL`                    | Base URL API tương thích OpenAI đã được tài khoản Xingchi xác nhận; bao gồm tiền tố phiên bản nếu nhà cung cấp yêu cầu |
 | `XINGCHI_API_KEY`                     | Bí mật chỉ ở server; lưu bằng secret/environment settings                                                              |
-| `DEFAULT_CHAT_MODEL`                  | Model ưu tiên, phải có trong kết quả `/models` thực tế                                                                 |
+| `XINGCHI_WIRE_API`                    | `responses` (mặc định) hoặc `chat_completions`; không tự đổi endpoint khi bị từ chối quyền                             |
+| `XINGCHI_MODEL_WIRE_API`              | JSON map ghi đè giao thức cho từng model, ví dụ `{"legacy-model":"chat_completions"}`                                  |
+| `DEFAULT_CHAT_MODEL`                  | `gpt-6.1-sol` mặc định; model phải có trong `/models` và vượt qua kiểm tra inference trước khi chọn                    |
 | `DEFAULT_IMAGE_MODEL`                 | Model tạo ảnh; để trống nếu chưa được xác minh                                                                         |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM` | Email xác minh/đặt lại mật khẩu; yêu cầu TLS                                                                           |
 | `SMTP_USER`, `SMTP_PASSWORD`          | Thông tin SMTP nếu server yêu cầu xác thực                                                                             |
@@ -64,23 +66,50 @@ node scripts/admin.mjs your-email@example.com
 
 ## Kết quả xác minh và giới hạn
 
-| Khả năng                                                                   | Bằng chứng / trạng thái                                                               |
-| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Tài khoản, lưu trữ và tách biệt dữ liệu                                    | Playwright với PostgreSQL thật                                                        |
-| Reset token hết hạn/dùng một lần/thu hồi session                           | Playwright với token được fixture tạo trực tiếp trong DB; **chưa thử gửi email thật** |
-| Chat streaming, tạo lại, hủy, xử lý lỗi, khóa đồng thời                    | Integration test với PostgreSQL thật và **upstream mock rõ ràng**                     |
-| Upload, validation, image re-encoding                                      | Unit + API E2E                                                                        |
-| OCR tiếng Anh                                                              | Tesseract thật trên ảnh fixture, không phải test Vision                               |
-| Xingchi `/models`, text, streaming, Vision, tool calling, image generation | **Chưa xác minh trực tiếp**: chờ Base URL và key mới                                  |
-| Gửi SMTP / tiếng Việt OCR                                                  | Chưa có SMTP / chưa có traineddata tiếng Việt                                         |
-| Production build / lint / TypeScript                                       | Có lệnh kiểm tra và CI; kết quả lần chạy được báo trong bàn giao                      |
-| Vercel / phục hồi cloud task mới                                           | Có hướng dẫn, chưa triển khai hoặc kiểm thử môi trường mới                            |
+| Khả năng                                                                   | Bằng chứng / trạng thái                                                                                                                          |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Tài khoản, lưu trữ và tách biệt dữ liệu                                    | Playwright với PostgreSQL thật                                                                                                                   |
+| Reset token hết hạn/dùng một lần/thu hồi session                           | Playwright với token được fixture tạo trực tiếp trong DB; **chưa thử gửi email thật**                                                            |
+| Chat streaming, tạo lại, hủy, xử lý lỗi, khóa đồng thời                    | Integration test với PostgreSQL thật và **upstream mock rõ ràng**                                                                                |
+| Upload, validation, image re-encoding                                      | Unit + API E2E                                                                                                                                   |
+| OCR tiếng Anh                                                              | Tesseract thật trên ảnh fixture, không phải test Vision                                                                                          |
+| Xingchi `/models`, text, streaming, Vision, tool calling, image generation | **Chưa xác minh trực tiếp trong runtime hiện tại**: Base URL đã xác nhận `https://api.xingchiapi.com/v1`; cần key và chính sách mạng có hiệu lực |
+| Gửi SMTP / tiếng Việt OCR                                                  | Chưa có SMTP / chưa có traineddata tiếng Việt                                                                                                    |
+| Production build / lint / TypeScript                                       | Có lệnh kiểm tra và CI; kết quả lần chạy được báo trong bàn giao                                                                                 |
+| Vercel / phục hồi cloud task mới                                           | Có hướng dẫn, chưa triển khai hoặc kiểm thử môi trường mới                                                                                       |
 
 Các phần chưa triển khai: web search trực tiếp (không có toggle giả), image editing, provider image URL tải từ xa, OCR PDF scan nhiều trang, tool execution, OAuth, dashboard quản trị đầy đủ (quản lý user, balance, audit lỗi chi tiết), streaming usage token, đổi model mặc định từ admin UI, tóm tắt context tự động, sửa tin nhắn tại chỗ và pagination trong UI. Nút bút ở tin nhắn hiện **dùng lại nội dung** để gửi mới, không sửa lịch sử. Backend trả 100 hội thoại gần nhất và 500 tin nhắn đầu; history gửi AI dùng tối đa 40 tin nhắn gần đây, 60.000 ký tự chat và 60.000 ký tự tài liệu; chưa có pagination hoặc tokenizer theo model.
 
-Giới hạn vận hành: nội dung tài liệu được parse trong request có giới hạn kích thước, chưa có worker sandbox, antivirus hoặc bảo vệ hoàn chỉnh trước archive bomb. Không nên mở upload công khai ở quy mô lớn trước khi thêm worker/resource isolation. File/ảnh nằm trong PostgreSQL phù hợp quy mô nhỏ; cần object storage và chính sách retention/backup cho production lớn. Không bảo đảm giữ nguyên phản hồi cũ nếu yêu cầu regenerate bị lỗi; có thể tạo lại từ tin nhắn người dùng. Rate limit đăng nhập có bucket tổng thể để không tin header IP có thể bị giả mạo; nên thêm edge/WAF trước khi mở công khai.
+Giới hạn vận hành: nội dung tài liệu được parse trong request có giới hạn kích thước, chưa có worker sandbox, antivirus hoặc bảo vệ hoàn chỉnh trước archive bomb. Không nên mở upload công khai ở quy mô lớn trước khi thêm worker/resource isolation. File/ảnh nằm trong PostgreSQL phù hợp quy mô nhỏ; cần object storage và chính sách retention/backup cho production lớn. Regenerate giữ phản hồi cũ nếu request bị từ chối hoặc luồng mới thất bại; chỉ thay phản hồi cũ khi lần tạo lại hoàn tất. Rate limit đăng nhập có bucket tổng thể để không tin header IP có thể bị giả mạo; nên thêm edge/WAF trước khi mở công khai.
 
 Không gọi toàn bộ tính năng master prompt là đã hoàn thành hoặc đã sẵn sàng public production dựa trên test mock.
+
+## Xingchi Responses API
+
+Cấu hình tài khoản đã xác nhận:
+
+```ini
+XINGCHI_BASE_URL=https://api.xingchiapi.com/v1
+XINGCHI_WIRE_API=responses
+DEFAULT_CHAT_MODEL=gpt-6.1-sol
+XINGCHI_MODEL_WIRE_API={}
+```
+
+Key chỉ nằm trong `XINGCHI_API_KEY` phía server. Không có header sao chép từ ứng dụng khác; adapter chỉ gửi Bearer Authorization và Content-Type. Nếu có model cũ yêu cầu Chat Completions, đặt JSON map ở server, ví dụ `XINGCHI_MODEL_WIRE_API={"legacy-model":"chat_completions"}`. Không suy đoán giao thức từ tên model, không tự chuyển endpoint sau lỗi 401/403 và không tự retry POST có thể tính phí.
+
+`POST /responses` nhận `instructions` từ chỉ dẫn system và `input` từ toàn bộ context đã chọn ở PostgreSQL. Tin nhắn user dùng `input_text`/`input_image`; lịch sử assistant dùng easy-input message dạng text. `store:false` và không có `previous_response_id`: hội thoại không phụ thuộc trạng thái ở provider. Event parser chỉ hiển thị `response.output_text.delta`; không đưa reasoning hoặc tool arguments lên UI. Luồng chỉ thành công khi có `response.completed`, còn `response.failed`, `response.incomplete`, error/refusal và luồng bị cắt được báo riêng. Hủy chat ngắt upstream và giải phóng lease PostgreSQL.
+
+Catalog `/models` chỉ xác nhận model có tên trong danh sách. Trước khi UI chọn model mặc định hoặc đổi model, `POST /api/models/validate` (cần đăng nhập) thực hiện một probe văn bản ngắn tối đa 256 output tokens bằng đúng giao thức. **Probe có thể được nhà cung cấp tính phí**. Kết quả thành công được cache 5 phút theo base URL, credential, model và giao thức; không cache lỗi. Kiểm tra này không chứng minh model hỗ trợ Vision hoặc tạo ảnh. Chat vẫn kiểm tra lại catalog và quyền thực tế qua request upstream.
+
+Lỗi trước khi stream trả JSON an toàn gồm `code`, `providerStatus` và `protocol`; ví dụ app HTTP 502 + `providerStatus:403` nghĩa là provider từ chối quyền, không phải phiên đăng nhập của chatPan. Lỗi sau khi stream bắt đầu được gửi trong NDJSON với `error` và kết thúc bằng `done:true, success:false`. Nội dung lỗi gốc của provider và key không được chuyển ra frontend hoặc console.
+
+Để kiểm chứng thật sau khi cấu hình **đã đến runtime**, chạy:
+
+```bash
+npm run test:provider:live
+```
+
+Lệnh này gọi catalog và gửi một Responses request thật tới `gpt-6.1-sol`, không mock và có thể tính phí. Kết quả unit/integration mock không thay thế kiểm chứng live. Trong cloud network bị hạn chế, phải cho phép đúng hostname `api.xingchiapi.com`; lưu draft/Publish chưa tự chứng minh instance đang chạy đã nhận cấu hình mới.
 
 ## Kiểm thử
 

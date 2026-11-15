@@ -42,6 +42,7 @@ import {
 } from "lucide-react";
 import Markdown from "react-markdown";
 import { Dialog } from "./ui/dialog";
+import { useProviderModels } from "./use-provider-models";
 import { motion, useReducedMotion } from "framer-motion";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -97,11 +98,17 @@ export default function ChatPan() {
     [sidebar, setSidebar] = useState(false),
     [collapsed, setCollapsed] = useState(false),
     [light, setLight] = useState(false);
-  const [modelList, setModelList] = useState<{ id: string }[]>([]),
-    [model, setModel] = useState(""),
-    [providerError, setProviderError] = useState(""),
-    [error, setError] = useState(""),
+  const [error, setError] = useState(""),
     [notice, setNotice] = useState("");
+  const {
+    modelList,
+    model,
+    providerError,
+    validatingModel,
+    loadModels,
+    selectModel,
+    resetModels,
+  } = useProviderModels(api, setError);
   const [imageMode, setImageMode] = useState("vision");
   const [text, setText] = useState(""),
     [attachments, setAttachments] = useState<Attachment[]>([]),
@@ -125,22 +132,6 @@ export default function ChatPan() {
     const [c, f] = await Promise.all([api("conversations"), api("folders")]);
     setConversations(c);
     setFolders(f);
-  }, []);
-  const loadModels = useCallback(async () => {
-    try {
-      const list = await api("models");
-      setModelList(list);
-      setModel(
-        (current) =>
-          current ||
-          list.find((m: { default?: boolean }) => m.default)?.id ||
-          list[0]?.id ||
-          "",
-      );
-      setProviderError("");
-    } catch (e) {
-      setProviderError((e as Error).message);
-    }
   }, []);
   useEffect(() => {
     let mounted = true;
@@ -405,8 +396,7 @@ export default function ChatPan() {
     setActive(null);
     setSettings(false);
     setSection("chat");
-    setModelList([]);
-    setModel("");
+    resetModels();
   }
   async function generate(event: FormEvent) {
     event.preventDefault();
@@ -679,10 +669,11 @@ export default function ChatPan() {
             <select
               aria-label="Chọn model"
               value={model}
-              onChange={(e) => setModel(e.target.value)}
+              disabled={validatingModel || busy}
+              onChange={(e) => selectModel(e.target.value)}
             >
               <option value="" disabled>
-                Chọn model AI
+                {validatingModel ? "Đang xác minh model…" : "Chọn model AI"}
               </option>
               {modelList.map((m) => (
                 <option key={m.id}>{m.id}</option>

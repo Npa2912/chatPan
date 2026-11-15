@@ -12,7 +12,16 @@ import {
   HttpError,
   tokenHash,
 } from "@/lib/security";
-import { models, provider, parseSSE } from "@/lib/provider";
+import {
+  models,
+  provider,
+  openChat,
+  requireModel,
+  validateModelAccess,
+  ProviderError,
+  type ChatMessage,
+  type ChatContent,
+} from "@/lib/provider";
 import { parseUpload } from "@/lib/uploads";
 import { sendToken } from "@/lib/mail";
 export const runtime = "nodejs";
@@ -221,7 +230,15 @@ async function handler(
         return json({ ok: true });
       }
     }
-    if (route === "models" && method === "GET") return json(await models());
+    if (route === "models" && method === "GET")
+      return json(await models(request.signal));
+    if (route === "models/validate" && method === "POST") {
+      await rateLimit("model-probe:" + account.id, 10, 60);
+      const { model } = z
+        .object({ model: z.string().min(1).max(200) })
+        .parse(await body(request));
+      return json(await validateModelAccess(model, request.signal));
+    }
     if (route === "folders") {
       if (method === "GET")
         return json(
@@ -403,11 +420,7 @@ async function handler(
         db.chatLease.deleteMany({
           where: { conversationId: conversation.id, token: leaseToken },
         });
-      if (!(await models()).some((m: { id: string }) => m.id === input.model))
-        throw new HttpError(
-          400,
-          "Model không có trong danh sách nhà cung cấp.",
-        );
+      await requireModel(input.model, request.signal);
       const ownFiles = await db.attachment.findMany({
         where: { id: { in: input.attachments }, userId: account.id },
       });
@@ -422,24 +435,35 @@ async function handler(
       if (ownFiles.length !== new Set(input.attachments).size)
         throw new HttpError(404, "Không tìm thấy tệp.");
       let history = conversation.messages.reverse();
+      let replaceAssistantId: string | undefined;
+      let pendingUser:
+        | {
+            conversationId: string;
+            role: string;
+            content: string;
+            attachmentIds: string[];
+          }
+        | undefined;
       if (input.regenerate) {
         const last = history.at(-1);
         if (last?.role === "assistant") {
-          await db.message.delete({ where: { id: last.id } });
+          replaceAssistantId = last.id;
           history = history.slice(0, -1);
         }
         if (history.at(-1)?.role !== "user")
           throw new HttpError(400, "Không có tin nhắn để tạo lại.");
       } else {
-        const message = await db.message.create({
-          data: {
-            conversationId: conversation.id,
-            role: "user",
-            content: input.content,
-            attachmentIds: input.attachments,
-          },
+        pendingUser = {
+          conversationId: conversation.id,
+          role: "user",
+          content: input.content,
+          attachmentIds: input.attachments,
+        };
+        history.push({
+          ...pendingUser,
+          id: crypto.randomUUID(),
+          createdAt: new Date(),
         });
-        history.push(message);
       }
       const settings = await db.userSettings.findUnique({
         where: { userId: account.id },
@@ -451,7 +475,7 @@ async function handler(
         selected.unshift(message);
         remaining -= message.content.length;
       }
-      const messages: unknown[] = [
+      const messages: ChatMessage[] = [
         {
           role: "system",
           content: settings?.systemPrompt || "Bạn là chatPan.",
@@ -462,7 +486,9 @@ async function handler(
         const files = await db.attachment.findMany({
           where: { id: { in: message.attachmentIds }, userId: account.id },
         });
-        const content: unknown[] = [{ type: "text", text: message.content }];
+        const content: ChatContent[] = [
+          { type: "text", text: message.content },
+        ];
         for (const file of files) {
           if (file.mime.startsWith("image/") && input.imageMode === "vision")
             content.push({
@@ -482,18 +508,24 @@ async function handler(
           }
         }
         messages.push({
-          role: message.role,
+          role: message.role === "assistant" ? "assistant" : "user",
           content: files.length ? content : message.content,
         });
       }
       const upstreamAbort = new AbortController();
-      const upstream = await provider(
-        "chat/completions",
-        { model: input.model, messages, stream: true },
+      const { deltas } = await openChat(
+        input.model,
+        messages,
         AbortSignal.any([request.signal, upstreamAbort.signal]),
       );
-      if (!upstream.body)
-        throw new HttpError(502, "Nhà cung cấp không trả dữ liệu.");
+      if (pendingUser) {
+        try {
+          await db.message.create({ data: pendingUser });
+        } catch (error) {
+          upstreamAbort.abort();
+          throw error;
+        }
+      }
       const encoder = new TextEncoder();
       let cancelled = false;
       const stream = new ReadableStream({
@@ -509,7 +541,7 @@ async function handler(
               controller.enqueue(encoder.encode(JSON.stringify(data) + "\n"));
           };
           try {
-            for await (const delta of parseSSE(upstream.body!)) {
+            for await (const delta of deltas) {
               if (output.length + delta.length > 200000)
                 throw new Error("Output limit exceeded");
               output += delta;
@@ -517,19 +549,38 @@ async function handler(
             }
             if (!output) throw new Error("empty");
             success = true;
-          } catch {
+          } catch (error) {
             if (!request.signal.aborted)
-              emit({ error: "Phản hồi bị gián đoạn. Bạn có thể thử tạo lại." });
+              emit(
+                error instanceof ProviderError
+                  ? {
+                      error: error.message,
+                      code: error.code,
+                      providerStatus: error.upstreamStatus,
+                      protocol: error.protocol,
+                    }
+                  : { error: "Phản hồi bị gián đoạn. Bạn có thể thử tạo lại." },
+              );
           } finally {
             try {
-              if (output)
-                await db.message.create({
-                  data: {
-                    conversationId: conversation.id,
-                    role: "assistant",
-                    content: output,
-                  },
+              if (output && (!replaceAssistantId || success)) {
+                await db.$transaction(async (tx) => {
+                  if (replaceAssistantId)
+                    await tx.message.deleteMany({
+                      where: {
+                        id: replaceAssistantId,
+                        conversationId: conversation.id,
+                      },
+                    });
+                  await tx.message.create({
+                    data: {
+                      conversationId: conversation.id,
+                      role: "assistant",
+                      content: output,
+                    },
+                  });
                 });
+              }
               await db.conversation.update({
                 where: { id: conversation.id },
                 data: {
@@ -542,7 +593,7 @@ async function handler(
               await db.apiUsage.create({
                 data: { userId: account.id, model: input.model, success },
               });
-              if (!request.signal.aborted) emit({ done: true });
+              if (!request.signal.aborted) emit({ done: true, success });
             } finally {
               await releaseLease?.();
               if (!cancelled) controller.close();
@@ -643,6 +694,7 @@ async function handler(
     throw new HttpError(404, "Không tìm thấy.");
   } catch (error) {
     await releaseLease?.().catch(() => {});
+    if (request.signal.aborted) return new Response(null, { status: 499 });
     if (error instanceof z.ZodError)
       return json(
         {
@@ -650,6 +702,16 @@ async function handler(
           details: error.issues.map((i) => i.path.join(".")),
         },
         400,
+      );
+    if (error instanceof ProviderError)
+      return json(
+        {
+          error: error.message,
+          code: error.code,
+          providerStatus: error.upstreamStatus,
+          protocol: error.protocol,
+        },
+        error.status,
       );
     if (error instanceof HttpError)
       return json({ error: error.message }, error.status);
