@@ -12,7 +12,8 @@
     "test:e2e": "playwright test",
     "db:migrate": "node scripts/migrate.mjs",
     "db:generate": "node scripts/generate.mjs",
-    "test:provider:live": "vitest run --config vitest.live.config.ts"
+    "test:provider:live": "vitest run --config vitest.live.config.ts tests/live/openai.live.ts",
+    "test:image:live": "vitest run --config vitest.live.config.ts tests/live/image-generation.live.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.10.1",

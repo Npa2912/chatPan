@@ -277,3 +277,136 @@ test("model picker uses mocked access validation: prefers gpt-6.1-sol and reject
     await page.request.delete("/api/me", { headers: { origin } });
   }
 });
+
+test("chat separates speakers, renders saved generated images and removes the inner input ring", async ({
+  page,
+}) => {
+  const address = email();
+  const registered = await page.request.post("/api/auth/register", {
+    headers: { origin },
+    data: { name: "Image layout", email: address, password },
+  });
+  expect(registered.status()).toBe(200);
+  try {
+    const account = await db.user.findUniqueOrThrow({
+      where: { email: address },
+    });
+    const sharp = (await import("sharp")).default;
+    const data = await sharp({
+      create: { width: 64, height: 64, channels: 3, background: "gold" },
+    })
+      .webp()
+      .toBuffer();
+    const image = await db.generatedImage.create({
+      data: {
+        userId: account.id,
+        prompt: "Fixture image",
+        data: new Uint8Array(data),
+      },
+    });
+    await db.conversation.create({
+      data: {
+        userId: account.id,
+        title: "Kiểm tra bố cục ảnh",
+        messages: {
+          create: [
+            {
+              role: "user",
+              content: "tạo ảnh wukong 3D đẹp",
+              createdAt: new Date(Date.now() - 1000),
+            },
+            {
+              role: "assistant",
+              content: `![Ảnh đã tạo](/api/images/${image.id})\n\n[Tải ảnh](/api/images/${image.id}?download=1)`,
+            },
+          ],
+        },
+      },
+    });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Kiểm tra bố cục ảnh" }).click();
+    const generated = page.getByAltText("Ảnh đã tạo");
+    await expect(generated).toBeVisible();
+    await expect
+      .poll(() =>
+        generated.evaluate((img: HTMLImageElement) => img.naturalWidth),
+      )
+      .toBe(64);
+    const download = page.waitForEvent("download");
+    await page.getByRole("link", { name: "Tải ảnh", exact: true }).click();
+    expect((await download).suggestedFilename()).toBe("chatpan.webp");
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      const user = await page
+        .locator(".message.user .message-body")
+        .boundingBox();
+      const assistant = await page
+        .locator(".message.assistant .message-body")
+        .boundingBox();
+      expect(user!.x).toBeGreaterThan(assistant!.x);
+      const input = page.getByRole("textbox", {
+        name: "Tin nhắn",
+        exact: true,
+      });
+      await input.focus();
+      expect(await input.evaluate((el) => getComputedStyle(el).boxShadow)).toBe(
+        "none",
+      );
+      expect(
+        await page
+          .locator(".composer")
+          .evaluate((el) => getComputedStyle(el).borderTopStyle),
+      ).toBe("solid");
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= window.innerWidth,
+        ),
+      ).toBe(true);
+    }
+    await page.getByRole("button", { name: "Tạo ảnh", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "Tạo ảnh", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page.getByRole("textbox", { name: "Tin nhắn", exact: true }),
+    ).toHaveAttribute("placeholder", "Mô tả ảnh bạn muốn tạo…");
+    // Explicit fixture server verifies UI dispatch and history refresh, not live AI.
+    await page.route("**/api/chat", async (route) => {
+      const input = route.request().postDataJSON();
+      expect(input.task).toBe("image");
+      expect(input.content).toBe("Một thành phố trên mây");
+      await db.message.create({
+        data: {
+          conversationId: input.conversationId,
+          role: "user",
+          content: input.content,
+        },
+      });
+      await db.message.create({
+        data: {
+          conversationId: input.conversationId,
+          role: "assistant",
+          content: `![Ảnh đã tạo](/api/images/${image.id})`,
+        },
+      });
+      await route.fulfill({
+        contentType: "application/x-ndjson",
+        body:
+          JSON.stringify({ done: true, success: true, imageId: image.id }) +
+          "\n",
+      });
+    });
+    await page
+      .getByRole("textbox", { name: "Tin nhắn", exact: true })
+      .fill("Một thành phố trên mây");
+    await page
+      .getByRole("button", { name: "Gửi tin nhắn", exact: true })
+      .click();
+    await expect(page.getByAltText("Ảnh đã tạo")).toHaveCount(2);
+    await expect(
+      page.getByText("Một thành phố trên mây", { exact: true }),
+    ).toBeVisible();
+  } finally {
+    await page.request.delete("/api/me", { headers: { origin } });
+  }
+});

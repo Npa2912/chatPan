@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { parseSSE, providerConfig, provider } from "../src/lib/provider";
+import {
+  parseSSE,
+  providerConfig,
+  provider,
+  wireApi,
+} from "../src/lib/provider";
 function stream(parts: string[]) {
   return new ReadableStream<Uint8Array>({
     start(controller) {
@@ -13,6 +18,33 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("Provider adapter — explicit mocked upstream tests", () => {
+  it("uses OpenAI directly and never inherits a legacy third-party URL or protocol", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "openai-test-only");
+    vi.stubEnv("CHATPAN_OPENAI_API_KEY", "");
+    vi.stubEnv("OPENAI_BASE_URL", "");
+    vi.stubEnv("XINGCHI_BASE_URL", "https://legacy.example/v1");
+    vi.stubEnv("XINGCHI_WIRE_API", "chat_completions");
+    expect(providerConfig()).toEqual({
+      key: "openai-test-only",
+      base: "https://api.openai.com/v1",
+    });
+    expect(wireApi("gpt-4.1")).toBe("responses");
+    const fetch = vi.fn().mockResolvedValue(Response.json({ data: [] }));
+    vi.stubGlobal("fetch", fetch);
+    await provider("models");
+    expect(fetch.mock.calls[0][0]).toBe("https://api.openai.com/v1/models");
+    expect(fetch.mock.calls[0][1].headers.Authorization).toBe(
+      "Bearer openai-test-only",
+    );
+  });
+  it("supports the managed-cloud alias for the OpenAI API key", () => {
+    vi.stubEnv("CHATPAN_OPENAI_API_KEY", "cloud-test-only");
+    vi.stubEnv("OPENAI_BASE_URL", "");
+    expect(providerConfig()).toEqual({
+      key: "cloud-test-only",
+      base: "https://api.openai.com/v1",
+    });
+  });
   it("requires server credentials", () => {
     vi.stubEnv("XINGCHI_API_KEY", "");
     expect(() => providerConfig()).toThrow("Chưa cấu hình");

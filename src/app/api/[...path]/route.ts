@@ -14,7 +14,6 @@ import {
 } from "@/lib/security";
 import {
   models,
-  provider,
   openChat,
   requireModel,
   validateModelAccess,
@@ -22,10 +21,12 @@ import {
   type ChatMessage,
   type ChatContent,
 } from "@/lib/provider";
+import { wantsImage } from "@/lib/image-intent";
+import { generateImage } from "@/lib/image-generation";
 import { parseUpload } from "@/lib/uploads";
 import { sendToken } from "@/lib/mail";
 export const runtime = "nodejs";
-export const maxDuration = 120;
+export const maxDuration = 300;
 const credentials = z.object({
   email: z
     .email()
@@ -390,7 +391,8 @@ async function handler(
         .object({
           conversationId: z.string(),
           content: z.string().max(24000),
-          model: z.string().min(1).max(200),
+          model: z.string().max(200).default(""),
+          task: z.enum(["auto", "text", "image"]).default("auto"),
           attachments: z.array(z.string()).max(4).default([]),
           regenerate: z.boolean().default(false),
           imageMode: z.enum(["vision", "ocr"]).default("vision"),
@@ -420,7 +422,6 @@ async function handler(
         db.chatLease.deleteMany({
           where: { conversationId: conversation.id, token: leaseToken },
         });
-      await requireModel(input.model, request.signal);
       const ownFiles = await db.attachment.findMany({
         where: { id: { in: input.attachments }, userId: account.id },
       });
@@ -435,6 +436,11 @@ async function handler(
       if (ownFiles.length !== new Set(input.attachments).size)
         throw new HttpError(404, "Không tìm thấy tệp.");
       let history = conversation.messages.reverse();
+      const previousImage =
+        history.at(-1)?.role === "assistant" &&
+        /!\[Ảnh đã tạo\]\(\/api\/images\/[a-zA-Z0-9_-]+\)/.test(
+          history.at(-1)!.content,
+        );
       let replaceAssistantId: string | undefined;
       let pendingUser:
         | {
@@ -465,6 +471,65 @@ async function handler(
           createdAt: new Date(),
         });
       }
+      const prompt = history.at(-1)!.content.trim();
+      const imageTask = input.regenerate
+        ? previousImage || wantsImage(prompt)
+        : wantsImage(prompt, input.task);
+      if (imageTask) {
+        if (prompt.length > 4000)
+          throw new HttpError(400, "Mô tả ảnh tối đa 4.000 ký tự.");
+        if (history.at(-1)!.attachmentIds.length)
+          throw new HttpError(
+            400,
+            "Tạo ảnh hiện hỗ trợ mô tả văn bản. Hãy bỏ tệp đính kèm; chỉnh sửa ảnh chưa được hỗ trợ.",
+          );
+        await rateLimit("images:" + account.id, 5, 60);
+        const image = await generateImage(prompt, request.signal);
+        const saved = await db.$transaction(async (tx) => {
+          const saved = await tx.generatedImage.create({
+            data: { userId: account.id, prompt, data: image.data },
+          });
+          if (pendingUser) await tx.message.create({ data: pendingUser });
+          if (replaceAssistantId)
+            await tx.message.deleteMany({
+              where: {
+                id: replaceAssistantId,
+                conversationId: conversation.id,
+              },
+            });
+          await tx.message.create({
+            data: {
+              conversationId: conversation.id,
+              role: "assistant",
+              content: `![Ảnh đã tạo](/api/images/${saved.id})\n\n[Tải ảnh](/api/images/${saved.id}?download=1)`,
+            },
+          });
+          await tx.conversation.update({
+            where: { id: conversation.id },
+            data: {
+              updatedAt: new Date(),
+              ...(history.length === 1 ? { title: prompt.slice(0, 70) } : {}),
+            },
+          });
+          await tx.apiUsage.create({
+            data: { userId: account.id, model: image.model, success: true },
+          });
+          return saved;
+        });
+        await releaseLease();
+        return new Response(
+          JSON.stringify({ done: true, success: true, imageId: saved.id }) +
+            "\n",
+          {
+            headers: {
+              "Content-Type": "application/x-ndjson",
+              "Cache-Control": "no-store",
+            },
+          },
+        );
+      }
+      if (!input.model) throw new HttpError(400, "Chọn model trước khi gửi.");
+      await requireModel(input.model, request.signal);
       const settings = await db.userSettings.findUnique({
         where: { userId: account.id },
       });
@@ -619,36 +684,11 @@ async function handler(
         }),
       );
     if (route === "images" && method === "POST") {
-      if (!process.env.DEFAULT_IMAGE_MODEL)
-        throw new HttpError(
-          503,
-          "Chưa cấu hình model tạo ảnh. Khả năng tạo ảnh chưa được xác minh.",
-        );
       await rateLimit("images:" + account.id, 5, 60);
       const input = z
         .object({ prompt: z.string().trim().min(1).max(4000) })
         .parse(await body(request));
-      const result = await (
-        await provider("images/generations", {
-          model: process.env.DEFAULT_IMAGE_MODEL,
-          prompt: input.prompt,
-          n: 1,
-          response_format: "b64_json",
-          size: "1024x1024",
-        })
-      ).json();
-      if (!result.data?.[0]?.b64_json)
-        throw new HttpError(
-          502,
-          "Chưa hỗ trợ phản hồi URL của nhà cung cấp; cần b64_json để lưu ảnh an toàn.",
-        );
-      const raw = Buffer.from(result.data[0].b64_json, "base64");
-      if (raw.length > 16 * 1024 * 1024)
-        throw new HttpError(502, "Ảnh trả về quá lớn.");
-      const sharp = (await import("sharp")).default;
-      const data = await sharp(raw, { limitInputPixels: 25000000 })
-        .webp()
-        .toBuffer();
+      const { data } = await generateImage(input.prompt, request.signal);
       return json(
         await db.generatedImage.create({
           data: {
@@ -673,6 +713,9 @@ async function handler(
         return new Response(image.data, {
           headers: {
             "Content-Type": "image/webp",
+            ...(request.nextUrl.searchParams.get("download") === "1"
+              ? { "Content-Disposition": 'attachment; filename="chatpan.webp"' }
+              : {}),
             "Cache-Control": "private, no-store",
           },
         });

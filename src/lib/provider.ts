@@ -25,18 +25,23 @@ const wireSchema = z.enum(["responses", "chat_completions"]);
 const probeCache = new Map<string, number>();
 const PROBE_TTL = 5 * 60 * 1000;
 export function providerConfig() {
-  const key = process.env.XINGCHI_API_KEY;
-  const base = process.env.XINGCHI_BASE_URL;
+  const openaiKey =
+    process.env.CHATPAN_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+  const key = openaiKey || process.env.XINGCHI_API_KEY;
+  // OpenAI credentials must never inherit a legacy third-party base URL.
+  const base = openaiKey
+    ? process.env.OPENAI_BASE_URL || "https://api.openai.com/v1"
+    : process.env.XINGCHI_BASE_URL;
   if (!key || !base)
     throw new HttpError(
       503,
-      "Chưa cấu hình nhà cung cấp AI. Quản trị viên cần đặt XINGCHI_API_KEY và XINGCHI_BASE_URL trên server.",
+      "Chưa cấu hình API OpenAI. Quản trị viên cần đặt OPENAI_API_KEY (hoặc CHATPAN_OPENAI_API_KEY trong môi trường cloud) trên server.",
     );
   let url: URL;
   try {
     url = new URL(base);
   } catch {
-    throw new HttpError(503, "XINGCHI_BASE_URL không hợp lệ.");
+    throw new HttpError(503, "Base URL của nhà cung cấp không hợp lệ.");
   }
   if (
     url.protocol !== "https:" ||
@@ -53,17 +58,28 @@ export function providerConfig() {
 }
 export function wireApi(model: string): WireApi {
   try {
+    const directOpenAI = !!(
+      process.env.CHATPAN_OPENAI_API_KEY || process.env.OPENAI_API_KEY
+    );
     const fallback = wireSchema.parse(
-      process.env.XINGCHI_WIRE_API || "responses",
+      (directOpenAI
+        ? process.env.OPENAI_WIRE_API
+        : process.env.XINGCHI_WIRE_API) || "responses",
     );
     const overrides = z
       .record(z.string(), wireSchema)
-      .parse(JSON.parse(process.env.XINGCHI_MODEL_WIRE_API || "{}"));
+      .parse(
+        JSON.parse(
+          (directOpenAI
+            ? process.env.OPENAI_MODEL_WIRE_API
+            : process.env.XINGCHI_MODEL_WIRE_API) || "{}",
+        ),
+      );
     return Object.hasOwn(overrides, model) ? overrides[model] : fallback;
   } catch {
     throw new HttpError(
       503,
-      "Cấu hình XINGCHI_WIRE_API hoặc XINGCHI_MODEL_WIRE_API không hợp lệ.",
+      "Cấu hình WIRE_API hoặc MODEL_WIRE_API của nhà cung cấp không hợp lệ.",
     );
   }
 }
@@ -162,7 +178,13 @@ export async function provider(
         ? "chat_completions"
         : undefined;
   const timeout = AbortSignal.timeout(
-    path === "models" ? 10000 : signal ? 90000 : 30000,
+    path === "models"
+      ? 10000
+      : path === "images/generations"
+        ? 240000
+        : signal
+          ? 90000
+          : 30000,
   );
   let response: Response;
   try {
@@ -223,7 +245,11 @@ export async function models(signal?: AbortSignal) {
       "invalid_response",
       "Danh sách model không hợp lệ.",
     );
-  const preferred = process.env.DEFAULT_CHAT_MODEL || "gpt-6.1-sol";
+  const preferred =
+    process.env.DEFAULT_CHAT_MODEL ||
+    (process.env.CHATPAN_OPENAI_API_KEY || process.env.OPENAI_API_KEY
+      ? "gpt-4.1"
+      : "gpt-6.1-sol");
   return data.data
     .filter((m: { id?: unknown } | null) => m && typeof m.id === "string")
     .map((m: { id: string }) => ({

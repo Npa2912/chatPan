@@ -41,6 +41,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import Markdown from "react-markdown";
+import { wantsImage, type ChatTask } from "@/lib/image-intent";
 import { Dialog } from "./ui/dialog";
 import { useProviderModels } from "./use-provider-models";
 import { motion, useReducedMotion } from "framer-motion";
@@ -109,6 +110,8 @@ export default function ChatPan() {
     selectModel,
     resetModels,
   } = useProviderModels(api, setError);
+  const [generatingImage, setGeneratingImage] = useState(false);
+  const [task, setTask] = useState<ChatTask>("auto");
   const [imageMode, setImageMode] = useState("vision");
   const [text, setText] = useState(""),
     [attachments, setAttachments] = useState<Attachment[]>([]),
@@ -258,7 +261,7 @@ export default function ChatPan() {
       setAuthOpen(true);
       return;
     }
-    if (!model) {
+    if (!regenerate && !model && !wantsImage(text, task)) {
       setError(providerError || "Chọn model trước khi gửi.");
       return;
     }
@@ -268,6 +271,13 @@ export default function ChatPan() {
     const controller = new AbortController();
     abort.current = controller;
     setBusy(true);
+    setGeneratingImage(
+      regenerate
+        ? /!\[Ảnh đã tạo\]\(\/api\/images\//.test(
+            messages.at(-1)?.content || "",
+          )
+        : wantsImage(content, task),
+    );
     setError("");
     let id = active;
     try {
@@ -304,6 +314,7 @@ export default function ChatPan() {
           attachments: attached.map((a) => a.id),
           regenerate,
           imageMode,
+          task,
         }),
       });
       if (!response.ok) {
@@ -345,7 +356,13 @@ export default function ChatPan() {
         if (done) break;
       }
     } catch (e) {
-      if ((e as Error).name !== "AbortError") setError((e as Error).message);
+      if ((e as Error).name !== "AbortError") {
+        setError((e as Error).message);
+        if (!regenerate) {
+          setText((current) => current || content);
+          setAttachments((current) => (current.length ? current : attached));
+        }
+      }
     } finally {
       setBusy(false);
       abort.current = null;
@@ -829,7 +846,10 @@ export default function ChatPan() {
                             remarkPlugins={[remarkGfm, remarkMath]}
                             rehypePlugins={[rehypeKatex, rehypeHighlight]}
                           >
-                            {m.content || "Đang suy nghĩ…"}
+                            {m.content ||
+                              (generatingImage
+                                ? "Đang tạo ảnh…"
+                                : "Đang suy nghĩ…")}
                           </Markdown>
                         </div>
                         {m.attachmentIds.map((id) => (
@@ -919,7 +939,11 @@ export default function ChatPan() {
                     ref={input}
                     value={text}
                     onChange={(e) => setText(e.target.value)}
-                    placeholder="Hỏi bất cứ điều gì, hoặc bắt đầu một ý tưởng…"
+                    placeholder={
+                      task === "image"
+                        ? "Mô tả ảnh bạn muốn tạo…"
+                        : "Hỏi bất cứ điều gì, hoặc bắt đầu một ý tưởng…"
+                    }
                     aria-label="Tin nhắn"
                     rows={2}
                     maxLength={24000}
@@ -962,7 +986,25 @@ export default function ChatPan() {
                     </button>
                   )}
                 </div>
+                {busy && (
+                  <div className="generation-status" role="status">
+                    <LoaderCircle size={14} className="spin" />
+                    {generatingImage
+                      ? "Đang tạo ảnh, vui lòng đợi…"
+                      : "Đang xử lý yêu cầu…"}
+                  </div>
+                )}
                 <div className="composer-bottom">
+                  <button
+                    type="button"
+                    className="image-task"
+                    aria-pressed={task === "image"}
+                    disabled={busy}
+                    onClick={() => setTask(task === "image" ? "auto" : "image")}
+                  >
+                    <ImageIcon size={17} />
+                    Tạo ảnh
+                  </button>
                   {attachments.some((f) => f.mime.startsWith("image/")) && (
                     <select
                       aria-label="Chế độ phân tích ảnh"

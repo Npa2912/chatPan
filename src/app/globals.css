@@ -637,6 +637,26 @@ main {
 .composer textarea::placeholder {
   color: #73797a;
 }
+.composer textarea:focus-visible {
+  box-shadow: none;
+  outline: none;
+}
+.generation-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 8px 0;
+}
+.composer-bottom .image-task[aria-pressed="true"] {
+  color: var(--gold);
+  background: #f5d64b12;
+  border-radius: 6px;
+}
+.composer-bottom {
+  flex-wrap: wrap;
+}
 .send {
   width: 31px;
   height: 31px;
@@ -731,6 +751,28 @@ main {
 .message-body {
   min-width: 0;
   flex: 1;
+}
+.message.user {
+  flex-direction: row-reverse;
+  margin-left: auto;
+  max-width: 85%;
+}
+.message.user .message-body {
+  flex: 0 1 auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px 4px 16px 16px;
+  padding: 12px 16px;
+}
+.message.user .message-meta,
+.message.user .message-actions {
+  justify-content: flex-end;
+}
+.markdown img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 12px;
 }
 .message-meta {
   display: flex;
