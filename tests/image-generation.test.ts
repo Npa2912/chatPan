@@ -40,7 +40,7 @@ beforeEach(async () => {
   vi.spyOn(security, "user").mockResolvedValue(account);
   vi.stubEnv("CHATPAN_OPENAI_API_KEY", "test-only");
   vi.stubEnv("OPENAI_BASE_URL", "https://api.openai.com/v1");
-  vi.stubEnv("DEFAULT_IMAGE_MODEL", "gpt-image-1");
+  vi.stubEnv("DEFAULT_IMAGE_MODEL", "gpt-image-2.6-sunburst");
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -95,6 +95,7 @@ it("routes direct image requests, but keeps explanatory questions as text", () =
   expect(wantsImage("tạo ảnh mèo", "text")).toBe(false);
 });
 it("generates an actual image via mocked upstream, persists chat/history, and protects image access", async () => {
+  vi.stubEnv("DEFAULT_IMAGE_MODEL", "");
   const fetch = mockImage();
   const response = await send({ content: "taoj anhr messi" });
   expect(response.status).toBe(200);
@@ -108,7 +109,7 @@ it("generates an actual image via mocked upstream, persists chat/history, and pr
     (fetch.mock.calls[0] as unknown as [string, RequestInit])[1].body as string,
   );
   expect(requestBody).toMatchObject({
-    model: "gpt-image-1",
+    model: "gpt-image-2.6-sunburst",
     prompt: "taoj anhr messi",
     n: 1,
   });
@@ -139,6 +140,22 @@ it("generates an actual image via mocked upstream, persists chat/history, and pr
   });
   expect((await get()).status).toBe(404);
   expect(await db.chatLease.count({ where: { conversationId } })).toBe(0);
+});
+it("explains the retired model setting without sending a request", async () => {
+  vi.stubEnv("DEFAULT_IMAGE_MODEL", "gpt-image-1");
+  const fetch = mockImage();
+  await expect(
+    generateImage("cat", new AbortController().signal),
+  ).rejects.toThrow("gpt-image-2.6-sunburst");
+  expect(fetch).not.toHaveBeenCalled();
+});
+it("supports the latest ChatGPT image alias without an unsupported response_format", async () => {
+  vi.stubEnv("DEFAULT_IMAGE_MODEL", "chatgpt-image-latest");
+  const fetch = mockImage();
+  await generateImage("cat", new AbortController().signal);
+  const body = JSON.parse(fetch.mock.calls[0][1].body as string);
+  expect(body.model).toBe("chatgpt-image-latest");
+  expect(body).not.toHaveProperty("response_format");
 });
 it("supports explicit image mode without a chat model and preserves images when regeneration fails", async () => {
   mockImage();

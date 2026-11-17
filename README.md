@@ -34,7 +34,7 @@ Không dùng mật khẩu PostgreSQL ví dụ cho production. Dữ liệu phát 
 | `OPENAI_WIRE_API`                    | `responses` (mặc định) hoặc `chat_completions`; không tự đổi endpoint khi bị từ chối quyền                             |
 | `OPENAI_MODEL_WIRE_API`              | JSON map ghi đè giao thức cho từng model, ví dụ `{"legacy-model":"chat_completions"}`                                  |
 | `DEFAULT_CHAT_MODEL`                  | `gpt-4.1` mặc định; model phải có trong `/models` và vượt qua kiểm tra inference trước khi chọn                    |
-| `DEFAULT_IMAGE_MODEL`                 | Mặc định `gpt-image-1` với key OpenAI; cần quyền tạo ảnh và hạn mức API                                                                         |
+| `DEFAULT_IMAGE_MODEL`                 | Mặc định `gpt-image-2.6-sunburst` với key OpenAI; cần quyền tạo ảnh và hạn mức API                                                                         |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM` | Email xác minh/đặt lại mật khẩu; yêu cầu TLS                                                                           |
 | `SMTP_USER`, `SMTP_PASSWORD`          | Thông tin SMTP nếu server yêu cầu xác thực                                                                             |
 | `OCR_ENABLED`                         | `true` để dùng Tesseract cục bộ, mặc định `false`                                                                      |
@@ -113,7 +113,9 @@ Lệnh này gọi catalog và gửi một Responses request thật tới `gpt-4.
 
 ## Tạo ảnh ngay trong chat bằng OpenAI
 
-Trên hosting (ví dụ Vercel), cấu hình `OPENAI_API_KEY` ở server. Trong managed cloud, tên `OPENAI_API_KEY` được nền tảng dành riêng: khai báo secret `CHATPAN_OPENAI_API_KEY`, chỉ gửi đến `api.openai.com`. Đặt `DEFAULT_IMAGE_MODEL=gpt-image-1` (cũng là mặc định khi có key OpenAI); có thể đổi sang model GPT Image khác mà project được phép dùng. Model ảnh độc lập với model chat. GPT Image trả base64 mặc định, không gửi tham số `response_format` không được hỗ trợ.
+Model ảnh mặc định đã cập nhật theo [SDK chính thức OpenAI](https://github.com/openai/openai-python/blob/main/src/openai/types/image_model.py) sang `gpt-image-2.6-sunburst`. `gpt-image-1` ngừng hoạt động từ 23/10/2026: nếu `.env` hiện có vẫn đặt model này, đổi `DEFAULT_IMAGE_MODEL` rồi khởi động lại server. Key vẫn cần quyền sử dụng model trong project; tên model có trong SDK không tự chứng minh project đã được cấp quyền.
+
+Trên hosting (ví dụ Vercel), cấu hình `OPENAI_API_KEY` ở server. Trong managed cloud, tên `OPENAI_API_KEY` được nền tảng dành riêng: khai báo secret `CHATPAN_OPENAI_API_KEY`, chỉ gửi đến `api.openai.com`. Đặt `DEFAULT_IMAGE_MODEL=gpt-image-2.6-sunburst` (cũng là mặc định khi có key OpenAI); có thể đổi sang model GPT Image khác mà project được phép dùng. Model ảnh độc lập với model chat. GPT Image trả base64 mặc định, không gửi tham số `response_format` không được hỗ trợ.
 
 Gõ “tạo ảnh wukong 3D đẹp” hoặc bật **Tạo ảnh**, nhập mô tả và gửi. Ảnh được lưu cùng cặp tin nhắn trong PostgreSQL, hiện trong chat sau khi hoàn tất, có liên kết tải và xuất hiện ở Image Studio. Tạo lại ảnh giữ phản hồi cũ nếu upstream lỗi. Hiện hỗ trợ text-to-image, chưa hỗ trợ chỉnh sửa ảnh đính kèm. Lỗi key/quyền/hạn mức được báo rõ, không thay bằng ảnh giả hoặc chỉ trả prompt.
 

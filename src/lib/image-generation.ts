@@ -6,12 +6,17 @@ export async function generateImage(prompt: string, signal: AbortSignal) {
   const model =
     process.env.DEFAULT_IMAGE_MODEL?.trim() ||
     (process.env.CHATPAN_OPENAI_API_KEY || process.env.OPENAI_API_KEY
-      ? "gpt-image-1"
+      ? "gpt-image-2.6-sunburst"
       : undefined);
   if (!model)
     throw new HttpError(
       503,
       "Chưa cấu hình model tạo ảnh. Quản trị viên cần đặt DEFAULT_IMAGE_MODEL và API key có quyền tạo ảnh trên server.",
+    );
+  if (model === "gpt-image-1")
+    throw new HttpError(
+      503,
+      "gpt-image-1 đã ngừng hoạt động từ 23/10/2026. Đổi DEFAULT_IMAGE_MODEL=gpt-image-2.6-sunburst trong cấu hình server rồi khởi động lại.",
     );
   const response = await provider(
     "images/generations",
@@ -21,7 +26,9 @@ export async function generateImage(prompt: string, signal: AbortSignal) {
       n: 1,
       size: "1024x1024",
       // GPT Image returns base64 by default and does not accept response_format.
-      ...(/^gpt-image-/i.test(model) ? {} : { response_format: "b64_json" }),
+      ...(/^(?:gpt-image-|chatgpt-image-)/i.test(model)
+        ? {}
+        : { response_format: "b64_json" }),
     },
     signal,
   );

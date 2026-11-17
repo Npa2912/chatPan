@@ -87,6 +87,7 @@ function upstreamError(
   status: number | null,
   code?: string,
   protocol?: WireApi,
+  param?: string,
 ) {
   if (
     [401, 403, 404].includes(status || 0) ||
@@ -101,6 +102,37 @@ function upstreamError(
   )
     probeCache.clear();
   const detail = status ? ` (HTTP ${status})` : "";
+  if (code === "organization_verification_required")
+    return new ProviderError(
+      "organization_verification_required",
+      "OpenAI yêu cầu xác minh tổ chức để dùng model này. Kiểm tra Verification trong cài đặt tổ chức OpenAI" +
+        detail +
+        ".",
+      status,
+      protocol,
+    );
+  if (["content_policy_violation", "moderation_blocked"].includes(code || ""))
+    return new ProviderError(
+      "image_request_rejected",
+      "OpenAI từ chối nội dung yêu cầu. Hãy thử một mô tả khác" + detail + ".",
+      status,
+      protocol,
+    );
+  if (
+    [
+      "billing_hard_limit_reached",
+      "billing_limit_reached",
+      "insufficient_quota",
+    ].includes(code || "")
+  )
+    return new ProviderError(
+      "provider_quota",
+      "Project OpenAI đã hết hạn mức hoặc chạm giới hạn thanh toán. Kiểm tra Billing và Limits trong OpenAI Platform" +
+        detail +
+        ".",
+      status,
+      protocol,
+    );
   if (
     status === 401 ||
     code === "invalid_api_key" ||
@@ -158,6 +190,31 @@ function upstreamError(
       status,
       protocol,
     );
+  if (status === 400) {
+    // Only known parameter names may appear in the UI. Never return raw error
+    // messages, unknown codes, request data, or credentials from the provider.
+    const knownParam = [
+      "model",
+      "size",
+      "n",
+      "quality",
+      "response_format",
+      "prompt",
+      "output_format",
+    ].includes(param || "")
+      ? param
+      : undefined;
+    return new ProviderError(
+      "provider_bad_request",
+      knownParam === "model"
+        ? "OpenAI không chấp nhận model đã cấu hình (HTTP 400). Kiểm tra DEFAULT_IMAGE_MODEL cho tạo ảnh và quyền truy cập model của project."
+        : knownParam
+          ? `OpenAI không chấp nhận tham số ${knownParam} (HTTP 400). Kiểm tra model và tham số tương thích của endpoint.`
+          : "OpenAI từ chối yêu cầu (HTTP 400). Kiểm tra model, tham số và quyền của project; phản hồi không cung cấp mã lỗi cụ thể được nhận diện.",
+      status,
+      protocol,
+    );
+  }
   return new ProviderError(
     "provider_failed",
     "Nhà cung cấp không thể hoàn tất yêu cầu" + detail + ".",
@@ -213,13 +270,24 @@ export async function provider(
   }
   if (!response.ok) {
     let code: string | undefined;
+    let param: string | undefined;
     try {
       const data = await response.json();
       if (typeof data?.error?.code === "string") code = data.error.code;
+      if (typeof data?.error?.param === "string") param = data.error.param;
+      // Some OpenAI verification errors have no structured code. Classify
+      // their message locally, but never expose or log the message itself.
+      if (
+        typeof data?.error?.message === "string" &&
+        /organization.{0,80}(?:must be verified|verification required|needs to be verified)/i.test(
+          data.error.message,
+        )
+      )
+        code = "organization_verification_required";
     } catch {
       /* Never expose raw upstream bodies. */
     }
-    throw upstreamError(response.status, code, protocol);
+    throw upstreamError(response.status, code, protocol, param);
   }
   return response;
 }

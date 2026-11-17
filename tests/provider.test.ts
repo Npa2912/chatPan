@@ -18,6 +18,55 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("Provider adapter — explicit mocked upstream tests", () => {
+  it.each([
+    [
+      { code: "content_policy_violation" },
+      "image_request_rejected",
+      "từ chối nội dung",
+    ],
+    [{ code: "billing_hard_limit_reached" }, "provider_quota", "thanh toán"],
+    [
+      { message: "Your organization must be verified to use this model." },
+      "organization_verification_required",
+      "xác minh tổ chức",
+    ],
+    [
+      { code: null, param: "response_format" },
+      "provider_bad_request",
+      "response_format",
+    ],
+    [{ code: null, param: "model" }, "provider_bad_request", "model"],
+    [
+      { code: "secret-unknown-code", param: "secret-unknown-param" },
+      "provider_bad_request",
+      "HTTP 400",
+    ],
+  ])(
+    "reports actionable, sanitized HTTP 400 errors: %j",
+    async (error, code, message) => {
+      vi.stubEnv("CHATPAN_OPENAI_API_KEY", "test-only");
+      vi.stubEnv("OPENAI_BASE_URL", "https://api.openai.com/v1");
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue(
+            Response.json(
+              { error: { message: "secret-raw-upstream-message", ...error } },
+              { status: 400 },
+            ),
+          ),
+      );
+      const result = await provider("images/generations", {
+        model: "gpt-image-2.6-sunburst",
+        prompt: "cat",
+      }).catch((e) => e);
+      expect(result.code).toBe(code);
+      expect(result.message).toContain(message);
+      expect(result.message).not.toContain("secret-");
+      expect(result.upstreamStatus).toBe(400);
+    },
+  );
   it("uses OpenAI directly and never inherits a legacy third-party URL or protocol", async () => {
     vi.stubEnv("OPENAI_API_KEY", "openai-test-only");
     vi.stubEnv("CHATPAN_OPENAI_API_KEY", "");
