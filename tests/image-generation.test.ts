@@ -96,7 +96,7 @@ it("routes direct image requests, but keeps explanatory questions as text", () =
 });
 it("generates an actual image via mocked upstream, persists chat/history, and protects image access", async () => {
   const fetch = mockImage();
-  const response = await send();
+  const response = await send({ content: "taoj anhr messi" });
   expect(response.status).toBe(200);
   const event = JSON.parse(await response.text());
   expect(event.success).toBe(true);
@@ -109,7 +109,7 @@ it("generates an actual image via mocked upstream, persists chat/history, and pr
   );
   expect(requestBody).toMatchObject({
     model: "gpt-image-1",
-    prompt: "tạo ảnh wukong 3D đẹp",
+    prompt: "taoj anhr messi",
     n: 1,
   });
   expect(requestBody).not.toHaveProperty("response_format");

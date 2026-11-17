@@ -373,8 +373,12 @@ test("chat separates speakers, renders saved generated images and removes the in
     // Explicit fixture server verifies UI dispatch and history refresh, not live AI.
     await page.route("**/api/chat", async (route) => {
       const input = route.request().postDataJSON();
-      expect(input.task).toBe("image");
-      expect(input.content).toBe("Một thành phố trên mây");
+      if (input.content === "Một thành phố trên mây")
+        expect(input.task).toBe("image");
+      else {
+        expect(input.content).toBe("taoj anhr messi");
+        expect(input.task).toBe("auto");
+      }
       await db.message.create({
         data: {
           conversationId: input.conversationId,
@@ -405,6 +409,17 @@ test("chat separates speakers, renders saved generated images and removes the in
     await expect(page.getByAltText("Ảnh đã tạo")).toHaveCount(2);
     await expect(
       page.getByText("Một thành phố trên mây", { exact: true }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Tạo ảnh", exact: true }).click();
+    await page
+      .getByRole("textbox", { name: "Tin nhắn", exact: true })
+      .fill("taoj anhr messi");
+    await page
+      .getByRole("button", { name: "Gửi tin nhắn", exact: true })
+      .click();
+    await expect(page.getByAltText("Ảnh đã tạo")).toHaveCount(3);
+    await expect(
+      page.getByText("taoj anhr messi", { exact: true }),
     ).toBeVisible();
   } finally {
     await page.request.delete("/api/me", { headers: { origin } });
